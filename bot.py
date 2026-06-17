@@ -135,10 +135,15 @@ def parse_group_identifier(input_str):
     return input_str
 
 # Helper: Generate Control Panel Keyboard
-def get_control_keyboard():
+async def get_control_keyboard():
     status_emoji = "🟢 ON" if config["auto_chat_enabled"] else "🔴 OFF"
-    userbot_auth = "Connected" if user_client.is_connected() and asyncio.run_coroutine_threadsafe(user_client.is_user_authorized(), asyncio.get_event_loop()).result() else "Disconnected"
     
+    try:
+        is_auth = await user_client.is_user_authorized() if user_client.is_connected() else False
+    except Exception:
+        is_auth = False
+        
+    userbot_auth = "Connected" if is_auth else "Disconnected"
     auth_emoji = "🔑" if userbot_auth == "Disconnected" else "✅ Connected"
     
     buttons = [
@@ -195,7 +200,7 @@ async def start_handler(event):
         return  # Ignore unauthorized users
 
     text = await get_status_text()
-    await event.respond(text, buttons=get_control_keyboard())
+    await event.respond(text, buttons=await get_control_keyboard())
 
 # Controller Bot Inline Buttons Handler
 @bot_client.on(events.CallbackQuery)
@@ -208,14 +213,14 @@ async def callback_handler(event):
     
     if data == "refresh_status":
         text = await get_status_text()
-        await event.edit(text, buttons=get_control_keyboard())
+        await event.edit(text, buttons=await get_control_keyboard())
         await event.answer("Status Refreshed!")
         
     elif data == "toggle_userbot":
         config["auto_chat_enabled"] = not config["auto_chat_enabled"]
         save_config()
         text = await get_status_text()
-        await event.edit(text, buttons=get_control_keyboard())
+        await event.edit(text, buttons=await get_control_keyboard())
         await event.answer(f"Auto-Chat turned {'ON' if config['auto_chat_enabled'] else 'OFF'}")
         
     elif data == "set_group":
@@ -257,7 +262,7 @@ async def callback_handler(event):
             await user_client.disconnect()
         await event.respond("❌ Logged out successfully and session deleted.")
         text = await get_status_text()
-        await event.edit(text, buttons=get_control_keyboard())
+        await event.edit(text, buttons=await get_control_keyboard())
         await event.answer("Logged Out")
 
 # Controller Bot Text Message Collector (for login flow / configs)
