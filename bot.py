@@ -418,7 +418,7 @@ def get_groups_keyboard():
 def get_settings_text():
     chat_interval = config.get("greeting_interval", 300)
     tagger_interval = config.get("tagger_interval", 900)
-    batch_size = config.get("tagger_batch_size", 5)
+    chat_lang = config.get("chat_language", "Hinglish")
     
     text = (
         "⚙️ **System Settings Configuration**\n\n"
@@ -426,8 +426,8 @@ def get_settings_text():
         "_Interval for periodic random greetings/rank booster._\n\n"
         f"⏱️ **Tagger Interval:** `{tagger_interval}s`\n"
         "_Interval for periodic group member tagging mentions._\n\n"
-        f"👥 **Tagger Batch Size:** `{batch_size}` members\n"
-        "_Number of group members tagged per message to avoid spam bans._"
+        f"🌐 **AI Chat Language:** `{chat_lang}`\n"
+        "_Language used by Gemini for conversational replies and tagger messages._"
     )
     return text
 
@@ -438,10 +438,35 @@ def get_settings_keyboard():
             Button.inline("⏱️ Set Tagger Interval", data="set_tagger_interval_flow")
         ],
         [
-            Button.inline("👥 Set Tagger Batch Size", data="set_batch_size_flow")
+            Button.inline("🌐 Set Chat Language", data="set_lang_menu")
         ],
         [
             Button.inline("🏡 Main Menu", data="go_main_menu")
+        ]
+    ]
+    return buttons
+
+def get_lang_text():
+    chat_lang = config.get("chat_language", "Hinglish")
+    text = (
+        "🌐 **Set Chat Language**\n\n"
+        f"Current Language: `{chat_lang}`\n\n"
+        "Select the language you want the chatbot and tagger to use from the options below:"
+    )
+    return text
+
+def get_lang_keyboard():
+    buttons = [
+        [
+            Button.inline("Hinglish", data="set_lang_Hinglish"),
+            Button.inline("Hindi (हिंदी)", data="set_lang_Hindi")
+        ],
+        [
+            Button.inline("English", data="set_lang_English"),
+            Button.inline("Punjabi (ਪੰਜਾਬੀ)", data="set_lang_Punjabi")
+        ],
+        [
+            Button.inline("⚙️ Settings Menu", data="go_settings_menu")
         ]
     ]
     return buttons
@@ -559,14 +584,18 @@ async def callback_handler(event):
         )
         await event.answer()
         
-    elif data == "set_batch_size_flow":
-        user_state[event.sender_id] = {"expecting": "tagger_batch_size"}
-        await event.edit(
-            "👥 **Set Tagger Batch Size**\n\n"
-            "Please send the number of members to tag per message (1 to 15):",
-            buttons=[[Button.inline("❌ Cancel", data="cancel_flow")]]
-        )
-        await event.answer()
+    elif data == "set_lang_menu":
+        text = get_lang_text()
+        await event.edit(text, buttons=get_lang_keyboard())
+        await event.answer("Language Menu")
+        
+    elif data.startswith("set_lang_"):
+        lang = data.replace("set_lang_", "")
+        config["chat_language"] = lang
+        save_config()
+        text = get_settings_text()
+        await event.edit(text, buttons=get_settings_keyboard())
+        await event.answer(f"Language set to {lang}!")
         
     # 5. Cancel / Back Flow
     elif data == "cancel_flow":
@@ -854,40 +883,6 @@ async def message_collector(event):
                     buttons=[[Button.inline("❌ Cancel", data="cancel_flow")]]
                 )
                 
-        elif expecting == "tagger_batch_size":
-            try:
-                size = int(text)
-                if size < 1 or size > 15:
-                    await event.respond(
-                        "⚠️ Batch size must be between 1 and 15.",
-                        buttons=[[Button.inline("❌ Cancel", data="cancel_flow")]]
-                    )
-                    return
-                config["tagger_batch_size"] = size
-                save_config()
-                user_state.pop(event.sender_id, None)
-                await event.respond(
-                    f"✅ Periodic tagger batch size set to `{size}` members.",
-                    buttons=[
-                        [Button.inline("⚙️ Settings Menu", data="go_settings_menu")],
-                        [Button.inline("🏡 Main Menu", data="go_main_menu")]
-                    ]
-                )
-            except ValueError:
-                await event.respond(
-                    "⚠️ Please enter a valid number (digits only):",
-                    buttons=[[Button.inline("❌ Cancel", data="cancel_flow")]]
-                )
-        return
-
-TAGGER_TEMPLATES = [
-    "Hello {mentions}, kya chal raha hai? Aao active karo group ko! 😂",
-    "Oi {mentions}, kahan gaayab ho sab? Chalo online aao baatein karte hai 😭",
-    "Bhai log {mentions}, active ho jao jaldi se! Tumhare bina group sunsaan pada hai ❤️",
-    "Kya chal raha hai {mentions}? Aao active karo thoda! 😂",
-    "{mentions} kahan ho yaar sab? Dil se bura lagta hai jab koi active nahi rehta 🥺"
-]
-
 last_response_time = {}
 
 # Auto-chat response using Gemini
@@ -895,9 +890,20 @@ async def get_gemini_reply(user_msg_text, sender_name):
     if not gemini_model:
         return "Haan bhai sahi baat hai."
         
+    chat_lang = config.get("chat_language", "Hinglish")
+    if chat_lang == "Hinglish":
+        lang_instruction = "casual, natural Hinglish (Hindi written in Latin script/English alphabet)"
+    elif chat_lang == "Hindi":
+        lang_instruction = "natural Hindi (using Hindi/Devanagari script / हिंदी)"
+    elif chat_lang == "Punjabi":
+        lang_instruction = "natural Punjabi (using Punjabi/Gurmukhi script / ਪੰਜਾਬੀ)"
+    else:
+        lang_instruction = f"natural {chat_lang}"
+        
     prompt = (
         f"Group member {sender_name} said: '{user_msg_text}'\n"
-        f"Give a short natural Hinglish response with Indian boy feelings/sweet bro vibes."
+        f"Give a short natural response in {lang_instruction} with Indian boy feelings/sweet bro vibes. "
+        f"Talk like a close friend/brother (use emotional/friendly slang of that language)."
     )
     
     try:
@@ -913,17 +919,27 @@ async def get_gemini_reply(user_msg_text, sender_name):
         logger.error(f"Gemini API Error: {e}")
         return "Haan wahi toh 😂"
 
-async def get_gemini_tagger_message(members_str):
+async def get_gemini_tagger_message(mention_str):
     if not gemini_model:
         return None
+        
+    chat_lang = config.get("chat_language", "Hinglish")
+    if chat_lang == "Hinglish":
+        lang_instruction = "casual, natural Hinglish (Hindi written in Latin script/English alphabet)"
+    elif chat_lang == "Hindi":
+        lang_instruction = "natural Hindi (using Hindi/Devanagari script / हिंदी)"
+    elif chat_lang == "Punjabi":
+        lang_instruction = "natural Punjabi (using Punjabi/Gurmukhi script / ਪੰਜਾਬੀ)"
+    else:
+        lang_instruction = f"natural {chat_lang}"
+        
     prompt = (
-        f"We want to tag/mention a few group members to make the group active.\n"
-        f"The members to tag are: {members_str}\n"
-        f"Write a very short, natural Hinglish message (1-2 sentences) tagging these members, "
+        f"We want to tag/mention a group member to make the group active.\n"
+        f"The member to tag is: {mention_str}\n"
+        f"Write a very short, natural response in {lang_instruction} (1 sentence) tagging this member, "
         f"asking them to come online and chat in the group. "
-        f"Speak like a close Indian friend/brother (young boy feelings/bro vibe, using words like 'bhai', 'yaar', 'kahan ho', 'active ho jao'). "
-        f"Keep it casual and emotional. "
-        f"Make sure to include the exact tags/mentions in your message naturally."
+        f"Speak like a close Indian friend/brother (young boy feelings/bro vibe, using casual, warm and emotional words of that language). "
+        f"Make sure to include the exact tag/mention in your message naturally."
     )
     try:
         loop = asyncio.get_running_loop()
@@ -994,16 +1010,16 @@ async def userbot_message_handler(event):
             is_reply_to_me = True
 
     if is_mentioning_me or is_reply_to_me:
-        # Group-level rate limiting (cooldown of 15 seconds) to avoid spam/cascade replies
+        # Group-level rate limiting (cooldown of 3 seconds) to avoid spam/cascade replies
         now = time.time()
         last_time = last_response_time.get(chat.id, 0)
-        if now - last_time < 15:
+        if now - last_time < 3:
             logger.info(f"Rate limit: Cooldown active in group {chat.id}. Skipping reply.")
             return
         last_response_time[chat.id] = now
         
         text = event.text.lower()
-        await asyncio.sleep(random.uniform(3.0, 6.0))
+        await asyncio.sleep(random.uniform(0.5, 1.2))
         
         is_accused = any(word in text for word in BOT_ACCUSATION_WORDS)
         if is_accused:
@@ -1014,7 +1030,7 @@ async def userbot_message_handler(event):
             
         try:
             async with user_client.action(chat.id, 'typing'):
-                await asyncio.sleep(random.uniform(2.0, 4.0))
+                await asyncio.sleep(random.uniform(0.5, 1.0))
                 await event.reply(reply_text)
                 logger.info(f"Replied to {sender_name} in group {chat.id}: '{reply_text}'")
         except Exception as e:
@@ -1111,29 +1127,25 @@ async def tagger_loop():
                 if not members:
                     continue
                     
-                batch_size = config.get("tagger_batch_size", 5)
                 member_items = list(members.items())
-                random.shuffle(member_items)
-                batch = member_items[:batch_size]
-                
-                if not batch:
-                    continue
-                    
-                mentions = []
-                for uid, info in batch:
-                    uname = info.get("username")
-                    fname = info.get("first_name") or "bhai"
-                    mentions.append(f"@{uname}" if uname else f"[{fname}](tg://user?id={uid})")
-                    
-                mentions_str = ", ".join(mentions)
+                uid, info = random.choice(member_items)
+                uname = info.get("username")
+                fname = info.get("first_name") or "bhai"
+                mention_str = f"@{uname}" if uname else f"[{fname}](tg://user?id={uid})"
                 
                 tagger_text = None
                 if gemini_model:
-                    tagger_text = await get_gemini_tagger_message(mentions_str)
+                    tagger_text = await get_gemini_tagger_message(mention_str)
                     
                 if not tagger_text:
-                    template = random.choice(TAGGER_TEMPLATES)
-                    tagger_text = template.format(mentions=mentions_str)
+                    templates = [
+                        "Hello {mention}, kya chal raha hai? Aao active karo group ko! 😂",
+                        "Oi {mention}, kahan gaayab ho? Chalo online aao baatein karte hai 😭",
+                        "Bhai {mention}, active ho ja jaldi se! Tere bina group sunsaan pada hai ❤️",
+                        "Kya chal raha hai {mention}? Aao active karo thoda! 😂",
+                        "{mention} kahan ho yaar? Dil se bura lagta hai jab koi active nahi rehta 🥺"
+                    ]
+                    tagger_text = random.choice(templates).format(mention=mention_str)
                     
                 try:
                     entity = await user_client.get_entity(chat_id_str if chat_id_str.startswith("-") or chat_id_str.isdigit() else chat_id_str)
